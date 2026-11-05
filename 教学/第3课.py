@@ -24,7 +24,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-图A = os.path.join(ROOT, "资料", "样本", "旧_yolo预演_171706.png")   # 有怪，但带旧工具的标注框
+图A = os.path.join(ROOT, "资料", "样本", "旧_yolo预演_171706.png")   # 有目标，但带旧工具的标注框
 图B = os.path.join(ROOT, "证据", "现场帧_1310.png")                  # 真实现场，只有宠物
 
 # 与 眼\血条.py 完全一致的常数（改动要同步，否则教学与生产不一致）

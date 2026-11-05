@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """感知层 · 找窗口
 
-从所有窗口里找到目标游戏窗口，拿到句柄(hwnd)。
+从所有窗口里找到目标程序窗口，拿到句柄(hwnd)。
 
 句柄是后续所有操作（截图、点击）的锚——没有句柄什么都做不了。
 
@@ -11,8 +11,8 @@ import ctypes
 import ctypes.wintypes as wt
 
 # === 配置：要找的窗口标题关键字 ===
-# 换游戏时改这里（或从 config.json 读）
-GAME_KEYWORD = ""  # 例: "你的游戏名" 或窗口标题里的特征词
+# 换目标程序时改这里（或从 config.json 读）
+TARGET_KEYWORD = ""  # 例: "你的程序名" 或窗口标题里的特征词
 
 user32 = ctypes.windll.user32
 
@@ -24,14 +24,14 @@ def enum_windows(keyword=None):
     """枚举所有可见窗口，返回标题含 keyword 的窗口列表。
 
     参数:
-        keyword: 标题关键字，None 时用 GAME_KEYWORD
+        keyword: 标题关键字，None 时用 TARGET_KEYWORD
 
     返回: [{"hwnd": 句柄, "title": 标题, "rect": [左,上,宽,高]}, ...]
           坐标系：rect 是屏幕坐标
     """
-    kw = keyword or GAME_KEYWORD
+    kw = keyword or TARGET_KEYWORD
     if not kw:
-        raise ValueError("未设置 GAME_KEYWORD，请配置游戏窗口标题关键字")
+        raise ValueError("未设置 TARGET_KEYWORD，请配置目标窗口标题关键字")
     found = []
 
     def callback(hwnd, _lparam):
@@ -59,11 +59,11 @@ def enum_windows(keyword=None):
 
 
 if __name__ == "__main__":
-    kw = GAME_KEYWORD or input("输入游戏窗口标题关键字: ")
+    kw = TARGET_KEYWORD or input("输入目标窗口标题关键字: ")
     print("正在查找标题含 %r 的窗口..." % kw)
     wins = enum_windows(kw)
     if not wins:
-        print("没找到！请确认游戏已打开、窗口标题含 %r" % kw)
+        print("没找到！请确认目标程序已打开、窗口标题含 %r" % kw)
     else:
         print("找到 %d 个窗口：" % len(wins))
         for w in wins:

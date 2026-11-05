@@ -62,7 +62,7 @@ def grab_frame(hwnd):
 if __name__ == "__main__":
     wins = enum_windows()
     if not wins:
-        print("没找到游戏窗口")
+        print("没找到目标窗口")
         exit()
     w = wins[0]
     print("找到窗口: %s  句柄=%d" % (w["title"], w["hwnd"]))

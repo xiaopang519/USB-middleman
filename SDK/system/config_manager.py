@@ -4,7 +4,7 @@
 管系统配置：读什么、怎么改、改完怎么生效。
 
 配置项：
-  game_keyword  str   ""           找窗口关键字（换游戏时改这里）
+  target_keyword str   ""           找窗口关键字（换目标程序时改这里）
   loop_interval float 0.3          主循环间隔(秒)
   mouse_dev     int   11           Interception鼠标设备号(重启生效)
   hotkey_stop   str   "ctrl+alt+q" 急停热键(重启生效)
@@ -21,7 +21,7 @@ import json
 import os
 
 DEFAULTS = {
-    "game_keyword": "",            # 换游戏时改这里
+    "target_keyword": "",         # 换目标程序时改这里
     "loop_interval": 0.3,
     "mouse_dev": 11,
     "hotkey_stop": "ctrl+alt+q",

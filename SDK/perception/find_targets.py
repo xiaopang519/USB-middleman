@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """感知层 · 色块识别（连通域分析）
 
-从画面里找目标（示例：找红色横条 = 找血条 = 找怪）。
+从画面里找目标（示例：找红色横条 = 找目标标记）。
 
 三步流程（所有图色识别的通用套路）：
   1. 阈值(Threshold)：判每个像素算不算目标 → 布尔掩码
   2. 连通域标记(Connected Component Labeling)：相邻目标像素聚成区域
   3. 过滤(Filter)：按面积/形状剔除噪点
 
-换游戏时改这里：
+换目标程序时改这里：
   - R_MIN/G_MAX/B_MAX：目标颜色阈值（采样真实画面定）
   - MAX_BAR_H/MIN_BAR_RATIO：目标形状（横条/方块/圆点）
   - Y_MAX：扫描区域（目标在画面哪部分）
@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import label, find_objects, center_of_mass
 
-# === 颜色阈值（示例：红色横条。换游戏要采样真实颜色）===
+# === 颜色阈值（示例：红色横条。换目标程序要采样真实颜色）===
 R_MIN, G_MAX, B_MAX = 150, 80, 80
 
 # === 面积过滤 ===
@@ -28,7 +28,7 @@ MAX_AREA = 2000
 MAX_BAR_H = 4         # 最大高度（像素）
 MIN_BAR_RATIO = 5     # 宽/高 最小比例
 
-# === 扫描区域（示例：只扫上半部分。换游戏改）===
+# === 扫描区域（示例：只扫上半部分。换目标程序改）===
 Y_MAX = 400
 
 

@@ -1,4 +1,4 @@
-r"""录制B机.py —— 把采集卡那一路（B 机游戏画面）录成视频。
+r"""录制B机.py —— 把采集卡那一路（B 机画面）录成视频。
 
 为什么不直接从采集卡再开一路：
     `USB3 Video` 这个设备已经被管道里那个 ffmpeg（PID 常驻）占着，
@@ -9,7 +9,7 @@ r"""录制B机.py —— 把采集卡那一路（B 机游戏画面）录成视�
 用法：
     python 工具\录制B机.py                 # 录 20 分钟，5fps
     python 工具\录制B机.py --秒 60 --fps 10
-输出：证据\录制\B机游戏_<时间>.mp4
+输出：证据\录制\B机画面_<时间>.mp4
 进度：每 30 秒打一行（已写帧数、文件大小、实际拿到帧的比例）
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def main() -> int:
           % (宽, 高, 秒, fps, int(秒 * fps)))
 
     os.makedirs(录制目录, exist_ok=True)
-    输出 = os.path.join(录制目录, "B机游戏_%s.mp4" % time.strftime("%Y%m%d_%H%M%S"))
+    输出 = os.path.join(录制目录, "B机画面_%s.mp4" % time.strftime("%Y%m%d_%H%M%S"))
     命令 = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", "%dx%d" % (宽, 高),
             "-r", str(fps), "-i", "-",

@@ -818,7 +818,7 @@ class Board:
                 return "OK sleep"
 
             if c == "reset":
-                # 这块板不是 Pico2W，reset 只能让它重新枚举 USB（游戏会丢鼠标锁定）。
+                # 这块板不是 Pico2W，reset 只能让它重新枚举 USB（目标程序会丢鼠标锁定）。
                 # 老实回 ERR，让操作台按"不支持"处理，而不是假装成功。
                 return "ERR reset unsupported on 2040 (HID feature-report board)"
 
