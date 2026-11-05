@@ -1,0 +1,8 @@
+# 自动化系统SDK 依赖
+# Python 3.12+
+# Windows（用了 ctypes 调 Windows API）
+numpy>=2.0
+Pillow>=10.0
+scipy>=1.10
+# Interception 驱动需单独安装（drivers/interception.dll 是驱动客户端）
+# 驱动本体从 https://github.com/oblitum/Interception 下载安装

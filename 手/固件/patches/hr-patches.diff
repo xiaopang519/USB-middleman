@@ -1,0 +1,278 @@
+diff --git a/firmware/remapper_single.ld b/firmware/remapper_single.ld
+index cd97758..a7b9695 100644
+--- a/firmware/remapper_single.ld
++++ b/firmware/remapper_single.ld
+@@ -72,7 +72,15 @@ SECTIONS
+         /* segments not marked as .flashdata are instead pulled into .data (in RAM) to avoid accidental flash accesses */
+         *(SORT_BY_ALIGNMENT(SORT_BY_NAME(.flashdata*)))
+         . = ALIGN(4);
+-        CMakeFiles/remapper.dir/src/*.o(.text*)
++        /* hid-remapper's own code runs from flash. RAM on RP2040 is only 256k and
++           the whole image is copy_to_ram, so anything left in RAM here is RAM the
++           heap does not get.
++           NOTE: upstream only lists *.o, which silently matches nothing when the
++           build uses Ninja; CMake then names the objects *.obj and every one of
++           our source files falls through to the RAM .text section instead.  Match
++           both extensions, and allow a path prefix so absolute object paths work. */
++        *remapper.dir/src/*.o(.text*)
++        *remapper.dir/src/*.obj(.text*)
+         . = ALIGN(4);
+     } > FLASH
+ 
+diff --git a/firmware/src/config.cc b/firmware/src/config.cc
+index 18764e5..cc81561 100644
+--- a/firmware/src/config.cc
++++ b/firmware/src/config.cc
+@@ -943,6 +943,16 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
+                 returned->return_code = persist_config_return_code;
+                 break;
+             }
++            // --- local addition: proof-of-life marker for the injection patch.
++            // The stock firmware answers an unknown command with an all-0xFF
++            // (INVALID_COMMAND) response, so this tells the two builds apart.
++            case ConfigCommand::INJECT: {
++                config_buffer->data[0] = 'I';
++                config_buffer->data[1] = 'N';
++                config_buffer->data[2] = 'J';
++                config_buffer->data[3] = '1';
++                break;
++            }
+             default:
+                 return 0;
+         }
+@@ -1113,6 +1123,31 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
+                     my_mutex_exit(MutexId::QUIRKS);
+                     break;
+                 }
++                // --- local additions: host-driven injection ---
++                case ConfigCommand::INJECT: {
++                    // data: int16 dx, int16 dy, int16 wheel, uint8 buttons, uint8 flags
++                    const uint8_t* p = config_buffer->data;
++                    int16_t dx, dy, wheel;
++                    memcpy(&dx, p + 0, 2);
++                    memcpy(&dy, p + 2, 2);
++                    memcpy(&wheel, p + 4, 2);
++                    inject_mouse(dx, dy, wheel, p[6], (p[7] & 0x01) != 0);
++                    break;
++                }
++                case ConfigCommand::INJECT_KB: {
++                    // data: uint8 n, then n * { uint16 usage, uint8 down }
++                    const uint8_t* p = config_buffer->data;
++                    uint8_t n = p[0];
++                    if (n > 8) {
++                        n = 8;
++                    }
++                    for (uint8_t i = 0; i < n; i++) {
++                        uint16_t usage;
++                        memcpy(&usage, p + 1 + i * 3, 2);
++                        inject_key(0x00070000 | usage, (p[1 + i * 3 + 2] & 0x01) != 0);
++                    }
++                    break;
++                }
+                 default:
+                     last_config_command = ConfigCommand::INVALID_COMMAND;
+                     break;
+diff --git a/firmware/src/remapper.cc b/firmware/src/remapper.cc
+index c1a5073..cba7c72 100644
+--- a/firmware/src/remapper.cc
++++ b/firmware/src/remapper.cc
+@@ -118,6 +118,80 @@ uint8_t port_register = 0;
+ 
+ uint64_t frame_counter = 0;
+ 
++// --- local additions: host-driven injection ---------------------------------
++// Values arrive over the config feature-report channel (see config.cc).  The
++// command handler runs from tud_task() in the same main-loop context as
++// process_mapping(), so no locking is needed for these.
++#define INJECT_USAGE_MOUSE_X 0x00010030
++#define INJECT_USAGE_MOUSE_Y 0x00010031
++#define INJECT_USAGE_WHEEL 0x00010038
++#define INJECT_USAGE_BTN_1 0x00090001
++#define INJECT_MAX_HELD_KEYS 8
++
++static int32_t inject_dx = 0;
++static int32_t inject_dy = 0;
++static int32_t inject_wheel = 0;
++static bool inject_relative_pending = false;
++static uint8_t inject_buttons = 0;
++static bool inject_buttons_valid = false;
++static uint32_t inject_held_keys[INJECT_MAX_HELD_KEYS] = { 0 };
++static uint8_t inject_held_key_count = 0;
++
++void inject_mouse(int16_t dx, int16_t dy, int16_t wheel, uint8_t buttons, bool buttons_valid) {
++    inject_dx += dx;
++    inject_dy += dy;
++    inject_wheel += wheel;
++    inject_relative_pending = true;
++    if (buttons_valid) {
++        inject_buttons = buttons;
++        inject_buttons_valid = true;
++    }
++}
++
++void inject_key(uint32_t usage, bool down) {
++    uint8_t i;
++    for (i = 0; i < inject_held_key_count; i++) {
++        if (inject_held_keys[i] == usage) {
++            break;
++        }
++    }
++    if (down) {
++        if ((i == inject_held_key_count) && (inject_held_key_count < INJECT_MAX_HELD_KEYS)) {
++            inject_held_keys[inject_held_key_count++] = usage;
++        }
++    } else if (i < inject_held_key_count) {
++        inject_held_keys[i] = inject_held_keys[--inject_held_key_count];
++        inject_held_keys[inject_held_key_count] = 0;
++    }
++}
++
++// Fold the injected relative movement into the same accumulator the normal
++// relative mappings use, so it goes out through the usual report path.
++static void apply_injected_relative(std::unordered_map<uint32_t, int32_t>& acc) {
++    if (!inject_relative_pending) {
++        return;
++    }
++    inject_relative_pending = false;
++    struct {
++        uint32_t usage;
++        int32_t value;
++    } deltas[3] = {
++        { INJECT_USAGE_MOUSE_X, inject_dx },
++        { INJECT_USAGE_MOUSE_Y, inject_dy },
++        { INJECT_USAGE_WHEEL, inject_wheel },
++    };
++    inject_dx = inject_dy = inject_wheel = 0;
++    for (auto const& d : deltas) {
++        if ((d.value != 0) && (our_usages_flat.count(d.usage) != 0)) {
++            acc[d.usage] += d.value * 1000;
++        }
++    }
++}
++
++// Buttons and keys are absolute: re-assert them onto every outgoing report.
++// (defined further down, after put_bits/get_bits)
++static void apply_injected_absolute();
++
+ #define HUB_PORT_NONE 255
+ #define NPORTS 15
+ std::unordered_map<uint8_t, uint8_t> hub_ports;  // dev_addr -> hub_port
+@@ -177,6 +251,32 @@ inline void put_bits(uint8_t* data, int len, uint16_t bitpos, uint8_t size, uint
+     }
+ }
+ 
++// Buttons and keys are absolute: re-assert them onto every outgoing report.
++static void apply_injected_absolute() {
++    static const uint32_t button_usages[5] = { 0x00090001, 0x00090002, 0x00090003, 0x00090004, 0x00090005 };
++    if (inject_buttons_valid) {
++        for (uint8_t i = 0; i < 5; i++) {
++            auto search = our_usages_flat.find(button_usages[i]);
++            if (search == our_usages_flat.end()) {
++                continue;
++            }
++            if ((inject_buttons >> i) & 1) {
++                const usage_def_t& def = search->second;
++                int32_t existing = get_bits((uint8_t*) reports[def.report_id], report_sizes[def.report_id], def.bitpos, def.size);
++                put_bits((uint8_t*) reports[def.report_id], report_sizes[def.report_id], def.bitpos, def.size, existing | 1);
++            }
++        }
++    }
++    for (uint8_t i = 0; i < inject_held_key_count; i++) {
++        auto search = our_usages_flat.find(inject_held_keys[i]);
++        if (search == our_usages_flat.end()) {
++            continue;
++        }
++        const usage_def_t& def = search->second;
++        put_bits((uint8_t*) reports[def.report_id], report_sizes[def.report_id], def.bitpos, def.size, 1);
++    }
++}
++
+ bool needs_to_be_sent(uint8_t report_id) {
+     uint8_t* report = reports[report_id];
+     uint8_t* prev_report = prev_reports[report_id];
+@@ -1372,6 +1472,10 @@ void process_mapping(bool auto_repeat) {
+         *state = 0;
+     }
+ 
++    // host-driven injection: fold PC-requested movement into the same
++    // accumulator the normal relative mappings use
++    apply_injected_relative(accumulated);
++
+     for (auto& [usage, accumulated_val] : accumulated) {
+         if (accumulated_val == 0) {
+             continue;
+@@ -1391,6 +1495,9 @@ void process_mapping(bool auto_repeat) {
+         }
+     }
+ 
++    // host-driven injection: buttons/keys are absolute, re-assert them
++    apply_injected_absolute();
++
+     for (unsigned int i = 0; i < report_ids.size(); i++) {  // XXX what order should we go in? maybe keyboard first so that mappings to ctrl-left click work as expected?
+         uint8_t report_id = report_ids[i];
+         if (our_descriptor->sanitize_report != nullptr) {
+diff --git a/firmware/src/remapper.h b/firmware/src/remapper.h
+index fc6226f..dedf932 100644
+--- a/firmware/src/remapper.h
++++ b/firmware/src/remapper.h
+@@ -42,6 +42,13 @@ void reset_state();
+ void set_monitor_enabled(bool enabled);
+ void monitor_usage(uint32_t usage, int32_t value, uint8_t hub_port);
+ 
++// --- local additions: host-driven injection (config commands 26/27) --------
++// Lets the PC emit its own mouse/keyboard reports through the board, so the
++// automation gets a hardware-level "hand" again while the board keeps acting as
++// a transparent middleman for the real device.
++void inject_mouse(int16_t dx, int16_t dy, int16_t wheel, uint8_t buttons, bool buttons_valid);
++void inject_key(uint32_t usage, bool down);
++
+ void sof_callback();
+ 
+ void device_connected_callback(uint16_t interface, uint16_t vid, uint16_t pid, uint8_t hub_port);
+diff --git a/firmware/src/tinyusb_stuff.cc b/firmware/src/tinyusb_stuff.cc
+index 52a49a4..d4abcaa 100644
+--- a/firmware/src/tinyusb_stuff.cc
++++ b/firmware/src/tinyusb_stuff.cc
+@@ -59,13 +59,13 @@ tusb_desc_device_t desc_device = {
+ 
+ const uint8_t configuration_descriptor0[] = {
+     TUD_CONFIG_DESCRIPTOR(1, 2, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+-    TUD_HID_DESCRIPTOR(0, 0, HID_ITF_PROTOCOL_KEYBOARD, our_descriptors[0].descriptor_length, 0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
++    TUD_HID_DESCRIPTOR(0, 0, HID_ITF_PROTOCOL_NONE, our_descriptors[0].descriptor_length, 0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
+     TUD_HID_DESCRIPTOR(1, 0, HID_ITF_PROTOCOL_NONE, config_report_descriptor_length, 0x83, CFG_TUD_HID_EP_BUFSIZE, 1),
+ };
+ 
+ const uint8_t configuration_descriptor1[] = {
+     TUD_CONFIG_DESCRIPTOR(1, 2, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN + TUD_HID_DESC_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+-    TUD_HID_DESCRIPTOR(0, 0, HID_ITF_PROTOCOL_KEYBOARD, our_descriptors[1].descriptor_length, 0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
++    TUD_HID_DESCRIPTOR(0, 0, HID_ITF_PROTOCOL_NONE, our_descriptors[1].descriptor_length, 0x81, CFG_TUD_HID_EP_BUFSIZE, 1),
+     TUD_HID_DESCRIPTOR(1, 0, HID_ITF_PROTOCOL_NONE, config_report_descriptor_length, 0x83, CFG_TUD_HID_EP_BUFSIZE, 1),
+ };
+ 
+@@ -182,7 +182,11 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
+         }
+ 
+         if (index == 3) {
+-            uint64_t unique_id = get_unique_id();
++            // XORed with a constant tag so that reflashing presents a *new*
++            // serial to the host.  Windows caches HID report descriptors and
++            // collection data per VID/PID/serial, so reusing the old serial
++            // after several reflashes leaves it using stale descriptors.
++            uint64_t unique_id = get_unique_id() ^ 0x0000A5A5A5A5A5A5ULL;
+             for (uint8_t i = 0; i < 12; i++) {
+                 _desc_str[1 + i] = id_chars[(unique_id >> (55 - i * 5)) & 0x1F];
+             }
+diff --git a/firmware/src/types.h b/firmware/src/types.h
+index 3bfa1be..09e0271 100644
+--- a/firmware/src/types.h
++++ b/firmware/src/types.h
+@@ -32,6 +32,9 @@ enum class ConfigCommand : int8_t {
+     CLEAR_QUIRKS = 23,
+     ADD_QUIRK = 24,
+     GET_QUIRK = 25,
++    // --- local additions for the middleman/bot link ---
++    INJECT = 26,             // data: int16 dx, int16 dy, int16 wheel, uint8 buttons, uint8 flags
++    INJECT_KB = 27,          // data: uint8 n, then n * { uint16 usage, uint8 down }
+ };
+ 
+ struct usage_def_t {

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行产物
+latest.png
+dsh_capture/
+*.log
+*.tmp
+status.txt
+diag.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地私货：不要提交你自己的画面、样张、路线、模型
+证据/
+资料/
+样本/
+*.npz
+*.pt
+*.onnx
